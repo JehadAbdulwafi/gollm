@@ -2,8 +2,8 @@ package tokenizer
 
 import (
 	"encoding/json"
-	"log"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -125,18 +125,38 @@ func (b *BytePairEncoder) getPairs(words []string) map[string]int {
 func (b *BytePairEncoder) selectBestPair(pairs map[string]int) string {
 	var (
 		maxCount int
-		bestPair string
 	)
 
-	for pair, count := range pairs {
-		if count > maxCount || (count == maxCount && pair < bestPair) {
-			bestPair = pair
+	// First pass: find max count
+	for _, count := range pairs {
+		if count > maxCount {
 			maxCount = count
 		}
 	}
-	return bestPair
-}
 
+	// Second pass: find all pairs with max count
+	var candidates []string
+	for pair, count := range pairs {
+		if count == maxCount {
+			candidates = append(candidates, pair)
+		}
+	}
+
+	// Prioritize pairs without word-end markers first
+	sort.Slice(candidates, func(i, j int) bool {
+		hasI := strings.Contains(candidates[i], "</w>")
+		hasJ := strings.Contains(candidates[j], "</w>")
+		if hasI == hasJ {
+			return candidates[i] < candidates[j]
+		}
+		return !hasI
+	})
+
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return ""
+}
 func (b *BytePairEncoder) mergePair(words []string, bestPair string) []string {
 	merged := strings.ReplaceAll(bestPair, " ", "")
 	newWords := make([]string, 0, len(words))
@@ -161,42 +181,43 @@ func (b *BytePairEncoder) mergePair(words []string, bestPair string) []string {
 
 	return newWords
 }
-
 func (b *BytePairEncoder) Encode(text string) []int {
 	processed := b.preprocessCorpus(text)
 	if len(processed) == 0 {
 		return nil
 	}
 
-	symbols := strings.Fields(strings.Join(processed, " "))
-	log.Printf("symbols: %v", symbols)
+	// Join all words and split into symbols
+	allSymbols := strings.Fields(strings.Join(processed, " "))
 
-	// Apply learned merges IN ORDER
-	for _, merge := range b.merges {
+	// Apply merges in reverse order (most recent first)
+	for i := len(b.merges) - 1; i >= 0; i-- {
+		merge := b.merges[i]
 		parts := strings.Split(merge, " ")
 		if len(parts) != 2 {
 			continue
 		}
 
 		var newSymbols []string
-		i := 0
-		for i < len(symbols) {
-			if i < len(symbols)-1 &&
-				symbols[i] == parts[0] &&
-				symbols[i+1] == parts[1] {
+		j := 0
+		for j < len(allSymbols) {
+			if j < len(allSymbols)-1 &&
+				allSymbols[j] == parts[0] &&
+				allSymbols[j+1] == parts[1] {
 				newSymbols = append(newSymbols, parts[0]+parts[1])
-				i += 2
+				j += 2
 			} else {
-				newSymbols = append(newSymbols, symbols[i])
-				i++
+				newSymbols = append(newSymbols, allSymbols[j])
+				j++
 			}
 		}
-		symbols = newSymbols
+		allSymbols = newSymbols
 	}
 
+	// Convert to IDs with unknown handling
 	unkID := b.vocab.GetID("<UNK>")
-	ids := make([]int, 0, len(symbols))
-	for _, s := range symbols {
+	ids := make([]int, 0, len(allSymbols))
+	for _, s := range allSymbols {
 		if id, exists := b.vocab.word2id[s]; exists {
 			ids = append(ids, id)
 		} else if unkID != -1 {
