@@ -92,10 +92,11 @@ func (b *BytePairEncoder) preprocessCorpus(corpus string) []string {
 	processed := make([]string, 0, len(words))
 
 	for _, word := range words {
-		chars := make([]string, 0, len(word)+1)
+		chars := make([]string, 0, len(word))
 		for _, c := range word {
 			chars = append(chars, string(c))
 		}
+		chars = append(chars, "</w>")
 		processed = append(processed, strings.Join(chars, " "))
 	}
 	return processed
