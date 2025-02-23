@@ -2,6 +2,7 @@ package tokenizer
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -22,16 +23,28 @@ func NewBPE(maxVocab int) *BytePairEncoder {
 }
 
 func (b *BytePairEncoder) Train(corpus string) {
+	fmt.Println("Preprocessing corpus...")
 	words := b.preprocessCorpus(corpus)
-	b.initializeVocab(words)
+	fmt.Printf("Found %d words\n", len(words))
 
+	fmt.Println("Initializing vocabulary...")
+	b.initializeVocab(words)
+	fmt.Printf("Initial vocabulary size: %d\n", b.vocab.Len())
+
+	iteration := 0
 	for b.vocab.Len() < b.maxVocab {
+		iteration++
+		fmt.Printf("Training iteration %d (vocab size: %d/%d)\n", iteration, b.vocab.Len(), b.maxVocab)
+
 		pairs := b.getPairs(words)
 		if len(pairs) == 0 {
+			fmt.Println("No more pairs to merge")
 			break
 		}
 
 		bestPair := b.selectBestPair(pairs)
+		fmt.Printf("Selected pair: %q (frequency: %d)\n", bestPair, pairs[bestPair])
+
 		words = b.mergePair(words, bestPair)
 		b.merges = append(b.merges, bestPair)
 		b.vocab.Add(strings.ReplaceAll(bestPair, " ", ""))
@@ -84,28 +97,37 @@ func (b *BytePairEncoder) LoadVocab(path string) error {
 }
 
 func (b *BytePairEncoder) preprocessCorpus(corpus string) []string {
-	preprocessor := NewPreprocessor(true)
-	cleanText := preprocessor.Clean(corpus)
-	normalizedText := preprocessor.NormalizeWhitespace(cleanText)
-
-	words := strings.Fields(normalizedText)
+	words := strings.Fields(corpus)
 	processed := make([]string, 0, len(words))
 
+	b.vocab.Add("<s>")   // Start of text
+	b.vocab.Add("</s>")  // End of text
+	b.vocab.Add("<unk>") // Unknown token
+	b.vocab.Add("<pad>") // Padding token
+	b.vocab.Add(" ")     // Space token
+
 	for _, word := range words {
-		chars := make([]string, 0, len(word))
-		for _, c := range word {
-			chars = append(chars, string(c))
+		if len(word) == 0 {
+			continue
+		}
+
+		chars := []string{" "}
+		for _, r := range word {
+			chars = append(chars, string(r))
 		}
 		chars = append(chars, "</w>")
+
 		processed = append(processed, strings.Join(chars, " "))
 	}
+
 	return processed
 }
 
 func (b *BytePairEncoder) initializeVocab(words []string) {
 	for _, word := range words {
-		for _, symbol := range strings.Fields(word) {
-			b.vocab.Add(symbol)
+		chars := strings.Split(word, " ")
+		for _, char := range chars {
+			b.vocab.Add(char)
 		}
 	}
 }
@@ -113,9 +135,9 @@ func (b *BytePairEncoder) initializeVocab(words []string) {
 func (b *BytePairEncoder) getPairs(words []string) map[string]int {
 	pairs := make(map[string]int)
 	for _, word := range words {
-		symbols := strings.Fields(word)
-		for i := 0; i < len(symbols)-1; i++ {
-			pair := symbols[i] + " " + symbols[i+1]
+		chars := strings.Split(word, " ")
+		for i := 0; i < len(chars)-1; i++ {
+			pair := chars[i] + " " + chars[i+1]
 			pairs[pair]++
 		}
 	}
@@ -123,106 +145,100 @@ func (b *BytePairEncoder) getPairs(words []string) map[string]int {
 }
 
 func (b *BytePairEncoder) selectBestPair(pairs map[string]int) string {
-	var (
-		maxCount int
-	)
-
-	// First pass: find max count
-	for _, count := range pairs {
-		if count > maxCount {
-			maxCount = count
-		}
+	type pair struct {
+		p string
+		c int
 	}
 
-	// Second pass: find all pairs with max count
-	var candidates []string
-	for pair, count := range pairs {
-		if count == maxCount {
-			candidates = append(candidates, pair)
-		}
+	pairList := make([]pair, 0, len(pairs))
+	for p, c := range pairs {
+		pairList = append(pairList, pair{p, c})
 	}
 
-	// Prioritize pairs without word-end markers first
-	sort.Slice(candidates, func(i, j int) bool {
-		hasI := strings.Contains(candidates[i], "</w>")
-		hasJ := strings.Contains(candidates[j], "</w>")
-		if hasI == hasJ {
-			return candidates[i] < candidates[j]
+	sort.Slice(pairList, func(i, j int) bool {
+		if pairList[i].c != pairList[j].c {
+			return pairList[i].c > pairList[j].c
 		}
-		return !hasI
+		return pairList[i].p < pairList[j].p
 	})
 
-	if len(candidates) > 0 {
-		return candidates[0]
+	if len(pairList) > 0 {
+		return pairList[0].p
 	}
 	return ""
 }
+
 func (b *BytePairEncoder) mergePair(words []string, bestPair string) []string {
-	merged := strings.ReplaceAll(bestPair, " ", "")
-	newWords := make([]string, 0, len(words))
-
-	for _, word := range words {
-		symbols := strings.Fields(word)
-		var newSymbols []string
-		i := 0
-
-		for i < len(symbols) {
-			if i < len(symbols)-1 &&
-				symbols[i]+" "+symbols[i+1] == bestPair {
-				newSymbols = append(newSymbols, merged)
-				i += 2
-			} else {
-				newSymbols = append(newSymbols, symbols[i])
-				i++
-			}
-		}
-		newWords = append(newWords, strings.Join(newSymbols, " "))
+	parts := strings.Split(bestPair, " ")
+	if len(parts) != 2 {
+		return words
 	}
 
-	return newWords
+	merged := strings.ReplaceAll(bestPair, " ", "")
+	result := make([]string, len(words))
+
+	for i, word := range words {
+		chars := strings.Split(word, " ")
+		var newChars []string
+
+		for j := 0; j < len(chars); j++ {
+			if j < len(chars)-1 && chars[j] == parts[0] && chars[j+1] == parts[1] {
+				newChars = append(newChars, merged)
+				j++
+			} else {
+				newChars = append(newChars, chars[j])
+			}
+		}
+
+		result[i] = strings.Join(newChars, " ")
+	}
+
+	return result
 }
+
 func (b *BytePairEncoder) Encode(text string) []int {
-	processed := b.preprocessCorpus(text)
-	if len(processed) == 0 {
+	if len(text) == 0 {
 		return nil
 	}
 
-	// Join all words and split into symbols
-	allSymbols := strings.Fields(strings.Join(processed, " "))
+	words := strings.Fields(text)
+	var tokens []int
 
-	// Apply merges in reverse order (most recent first)
-	for i := len(b.merges) - 1; i >= 0; i-- {
-		merge := b.merges[i]
-		parts := strings.Split(merge, " ")
-		if len(parts) != 2 {
+	for i, word := range words {
+		if len(word) == 0 {
 			continue
 		}
 
-		var newSymbols []string
-		j := 0
-		for j < len(allSymbols) {
-			if j < len(allSymbols)-1 &&
-				allSymbols[j] == parts[0] &&
-				allSymbols[j+1] == parts[1] {
-				newSymbols = append(newSymbols, parts[0]+parts[1])
-				j += 2
-			} else {
-				newSymbols = append(newSymbols, allSymbols[j])
-				j++
+		if i > 0 {
+			if spaceID := b.vocab.GetID(" "); spaceID >= 0 {
+				tokens = append(tokens, spaceID)
 			}
 		}
-		allSymbols = newSymbols
-	}
 
-	// Convert to IDs with unknown handling
-	unkID := b.vocab.GetID("<UNK>")
-	ids := make([]int, 0, len(allSymbols))
-	for _, s := range allSymbols {
-		if id, exists := b.vocab.word2id[s]; exists {
-			ids = append(ids, id)
-		} else if unkID != -1 {
-			ids = append(ids, unkID)
+		chars := make([]string, 0, len(word))
+		for _, c := range word {
+			chars = append(chars, string(c))
+		}
+		chars = append(chars, "</w>")
+		current := strings.Join(chars, " ")
+
+		for _, merge := range b.merges {
+			parts := strings.Split(merge, " ")
+			if len(parts) != 2 {
+				continue
+			}
+			current = strings.ReplaceAll(current, merge, strings.ReplaceAll(merge, " ", ""))
+		}
+
+		subwords := strings.Split(current, " ")
+		for _, subword := range subwords {
+			if id := b.vocab.GetID(subword); id >= 0 {
+				tokens = append(tokens, id)
+			} else if unkID := b.vocab.GetID("<unk>"); unkID >= 0 {
+				tokens = append(tokens, unkID)
+			}
 		}
 	}
-	return ids
+
+	return tokens
 }
