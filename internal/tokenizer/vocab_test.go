@@ -12,16 +12,13 @@ func TestVocab_AddGet(t *testing.T) {
 		v.Add(w)
 	}
 
-	// Test counts
 	assertIntEqual(t, v.counts["apple"], 2, "apple count")
 	assertIntEqual(t, v.counts["banana"], 1, "banana count")
 
-	// Test ID mapping
 	assertIntEqual(t, v.GetID("apple"), 0, "apple ID")
 	assertIntEqual(t, v.GetID("banana"), 1, "banana ID")
 	assertIntEqual(t, v.GetID("missing"), -1, "missing ID")
 
-	// Test reverse lookup
 	assertStringEqual(t, v.GetWord(0), "apple", "ID 0")
 	assertStringEqual(t, v.GetWord(1), "banana", "ID 1")
 }
@@ -69,13 +66,10 @@ func TestVocab_UnknownHandling(t *testing.T) {
 	v.Add("<UNK>")
 	v.Add("test")
 
-	// Test known word
 	assertEqual(t, v.GetID("test"), 1, "known word ID")
 
-	// Test unknown word
 	assertEqual(t, v.GetID("missing"), -1, "unknown word ID")
 
-	// Test explicit unknown
 	if id := v.GetID("<UNK>"); id != 0 {
 		t.Errorf("Expected <UNK> ID 0, got %d", id)
 	}
